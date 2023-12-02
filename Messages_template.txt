@@ -1,0 +1,293 @@
+{-# LANGUAGE DuplicateRecordFields     #-}
+{-# LANGUAGE DeriveGeneric             #-}
+{-# LANGUAGE NoFieldSelectors          #-}
+{-# LANGUAGE OverloadedLabels          #-}
+
+-- Generic
+{-# LANGUAGE TypeOperators, FlexibleContexts, FlexibleInstances, DefaultSignatures #-}
+
+-- Allow function signatures in instance declaration
+{-# LANGUAGE InstanceSigs              #-}
+
+module IMC.Messages where
+
+-- Generic programming and OverloadedLabels support
+import GHC.Generics
+import Data.Generics.Labels
+
+import Debug.Trace
+
+import Data.Serialize
+
+-- Temporary
+import Network.Connection       ( connectionPut, connectionGet, Connection, connectTo,
+                                  initConnectionContext, ConnectionParams(..) )
+import Control.Concurrent     ( readChan, writeChan, Chan, newChan, forkIO )
+
+-- Types
+import           Data.Word              ( Word8, Word16, Word32 )
+import           Data.Int               ( Int8, Int16, Int32, Int64 )
+import qualified Data.ByteString as BS  ( ByteString, length, empty, splitAt, append, drop, readFile, writeFile, appendFile, pack, null )
+import IMC.Base                         ( crc16' )
+import Data.Char                        ( ord, chr )
+import Control.Monad (when)
+
+-- | #########################################
+-- | Generics
+-- | #########################################
+
+class IMCSerialize a where
+  putIMC :: Bool -> Putter a
+
+  default putIMC :: (Generic a, GIMCSerialize (Rep a)) => Bool -> Putter a
+  putIMC be = gputIMC be . from
+
+  getIMC :: Bool -> Get a
+
+  default getIMC :: (Generic a, GIMCSerialize (Rep a)) => Bool -> Get a
+  getIMC be = to <$> ggetIMC be
+
+instance IMCSerialize Word8 where
+  putIMC _ = putWord8
+  getIMC _ = getWord8
+
+instance IMCSerialize Word16 where
+  putIMC be = if be
+                then putWord16be
+                else putWord16le
+  getIMC be = if be
+                then getWord16be
+                else getWord16le
+
+instance IMCSerialize Word32 where
+  putIMC be = if be
+                then putWord32be
+                else putWord32le
+  getIMC be = if be
+                then getWord32be
+                else getWord32le
+
+instance IMCSerialize Int8 where
+  putIMC _ = putInt8
+  getIMC _ = getInt8
+
+instance IMCSerialize Char where
+  putIMC _ = putWord8 . fromIntegral . ord
+  getIMC _ = chr . fromIntegral <$> getWord8
+
+instance IMCSerialize Int16 where
+  putIMC be = if be
+                then putInt16be
+                else putInt16le
+  getIMC be = if be
+                then getInt16be
+                else getInt16le
+
+instance IMCSerialize Int32 where
+  putIMC be = if be
+                then putInt32be
+                else putInt32le
+  getIMC be = if be
+                then getInt32be
+                else getInt32le
+
+instance IMCSerialize Int64 where
+  putIMC be = if be
+                then putInt64be
+                else putInt64le
+  getIMC be = if be
+                then getInt64be
+                else getInt64le
+
+instance IMCSerialize Float where
+  putIMC be = if be
+                then putFloat32be
+                else putFloat32le
+  getIMC be = if be
+                then getFloat32be
+                else getFloat32le
+
+instance IMCSerialize Double where
+  putIMC be = if be
+                then putFloat64be
+                else putFloat64le
+  getIMC be = if be
+                then getFloat64be
+                else getFloat64le
+
+instance IMCSerialize BS.ByteString where
+  putIMC be bs = do putIMC be (fromIntegral $ BS.length bs :: Word16)
+                    putByteString bs
+  getIMC be = do
+                s <- fromIntegral <$> (getIMC be :: Get Word16)
+                getByteString s
+
+instance IMCSerialize a => IMCSerialize [a] where
+  putIMC be x = do
+              putIMC be (fromIntegral $ length x :: Word16)
+              mapM_ (putIMC be) x
+  getIMC be = do
+                let goNtimes as 0 = return $! reverse as
+                    goNtimes as i = do  x <- getIMC be
+                                        x `seq` goNtimes (x:as) (i - 1)
+                goNtimes [] . fromIntegral =<< (getIMC be :: Get Word16)
+
+class GIMCSerialize f where
+  gputIMC :: Bool -> Putter (f a)
+  ggetIMC :: Bool -> Get (f a)
+
+-- | Meta-information (constructor names, etc.)
+instance GIMCSerialize a => GIMCSerialize (M1 i c a) where
+    gputIMC :: GIMCSerialize a => Bool -> Putter (M1 i c a a1)
+    gputIMC be = gputIMC be . unM1
+    {-# INLINE gputIMC #-}
+    ggetIMC :: GIMCSerialize a => Bool -> Get (M1 i c a a1)
+    ggetIMC be = M1 <$> ggetIMC be
+    {-# INLINE ggetIMC #-}
+
+-- | Constants, additional parameters and recursion of kind *
+instance IMCSerialize a => GIMCSerialize (K1 i a) where
+    gputIMC :: IMCSerialize a => Bool -> Putter (K1 i a a1)
+    gputIMC be = putIMC be . unK1
+    {-# INLINE gputIMC #-}
+    ggetIMC :: IMCSerialize a => Bool -> Get (K1 i a a1)
+    ggetIMC be = K1 <$> getIMC be
+    {-# INLINE ggetIMC #-}
+
+-- | Unit: used for constructors without arguments
+instance GIMCSerialize U1 where
+    gputIMC :: Bool -> Putter (U1 a)
+    gputIMC _ _ = pure ()
+    {-# INLINE gputIMC #-}
+    ggetIMC _   = pure U1
+    ggetIMC :: Bool -> Get (U1 a)
+    {-# INLINE ggetIMC #-}
+
+-- | Products: encode multiple arguments to constructors
+instance (GIMCSerialize a, GIMCSerialize b) => GIMCSerialize (a :*: b) where
+    gputIMC :: (GIMCSerialize a, GIMCSerialize b) => Bool -> Putter ((:*:) a b a1)
+    gputIMC be (a :*: b) = gputIMC be a *> gputIMC be b
+    {-# INLINE gputIMC #-}
+    ggetIMC :: (GIMCSerialize a, GIMCSerialize b) => Bool -> Get ((:*:) a b a1)
+    ggetIMC be = (:*:) <$> ggetIMC be <*> ggetIMC be
+    {-# INLINE ggetIMC #-}
+
+-- We do not need a sum generic instance, since message fields won't have sums... Right? Right???
+
+-- | #########################################
+-- | Messages
+-- | #########################################
+
+%MESSAGES%
+
+data MessageF = %CONSTRUCTORS%
+  | Unparsed Word16 BS.ByteString deriving (Show, Eq, Generic)
+instance IMCSerialize MessageF where
+  putIMC :: Bool -> Putter MessageF
+  putIMC be m = case m of
+    %IMCPUTS%
+    Unparsed _id f -> putIMC be _id >> putByteString f
+  getIMC :: Bool -> Get MessageF
+  getIMC be = do
+    _id <- getIMC be :: Get Word16
+    case _id of
+      %IMCGETS%
+      _ -> Unparsed _id <$> (getByteString =<< remaining)
+
+data Message = Message {
+    src       :: Word16
+  , src_ent   :: Word8
+  , dst       :: Word16
+  , dst_ent   :: Word8
+  , fields    :: MessageF
+  } deriving (Show, Eq, Generic)
+
+serialize :: IMCSerialize a => Bool -> a -> BS.ByteString
+serialize be = runPut . putIMC be
+
+deserialize :: IMCSerialize a => Bool -> BS.ByteString -> Either String a
+deserialize be = runGet $ getIMC be
+
+data Header = Header
+  { sync :: Word16,
+    mgid :: Word16,
+    size :: Word16,
+    timestamp :: Double,
+    src :: Word16,
+    src_ent :: Word8,
+    dst :: Word16,
+    dst_ent :: Word8
+  }
+  deriving (Eq, Show, Generic)
+instance IMCSerialize Header where
+  -- put is generically derived
+  getIMC _ = do
+    syncNumber <- getWord16be
+    case syncNumber of
+      0xFE54 -> Header syncNumber <$> getWord16be <*> getWord16be <*> getFloat64be <*> getWord16be <*> getWord8 <*> getWord16be <*> getWord8
+      0x54FE -> Header syncNumber <$> getWord16le <*> getWord16le <*> getFloat64le <*> getWord16le <*> getWord8 <*> getWord16le <*> getWord8
+      _ -> fail "Invalid sync number"
+
+data NetworkMessage = NetworkMessage {
+    header :: Header
+  , fields :: MessageF
+  , footer :: Word16
+} deriving (Eq, Show, Generic)
+instance IMCSerialize NetworkMessage where
+  putIMC be m = do
+    let NetworkMessage (Header _ _ _ t src src_ent dst dst_ent) f _f = m
+        (_id, contents) = BS.splitAt 2 (serialize be f)
+        eitherID = if be then runGet getWord16be _id else runGet getWord16le _id
+    case eitherID of
+      Right __id -> do
+        let serialized_h = serialize be $ Header 0xFE54 __id (fromIntegral $ BS.length contents) t src src_ent dst dst_ent
+        putByteString serialized_h
+        putByteString contents
+        putIMC be (crc16' $ BS.append serialized_h contents)
+      _      -> putIMC be "Failed to get id from message fields" -- This is stupid. It FAILED, but I cannot call a failure here.
+  getIMC _ = do
+    let getIMCE :: Get (Either String NetworkMessage)
+        getIMCE =
+          do
+            bin_header <- lookAhead $ getByteString 20
+            h <- getIMC True :: Get Header -- 'be' parameter is ignored when get'ing the Header
+            let Header syncNumber mid _size _ _ _ _ _ = h
+                be = syncNumber == 0xFE54
+                h' = h {sync = 0xFE54}
+            contents <- getByteString $ fromIntegral _size
+            msg_crc <- getIMC be :: Get Word16
+            if msg_crc == crc16' (BS.append bin_header contents)
+              then
+                case deserialize be $ BS.append (serialize be mid) contents of
+                  Right mf  -> return . Right $ NetworkMessage h' mf msg_crc
+                  Left a    -> return $ Left a
+              else return $ Left "Invalid CRC"
+    
+    attempt <- lookAheadE getIMCE
+    case attempt of
+      Right m -> return m
+      Left error -> fail error
+
+-- |Test function that reads a whole .lsf file deserializes, serializes and writes to the
+-- |output file
+readFile :: String -> String -> IO ()
+readFile i_file o_file = do
+  let buffer_size = 8192
+      loop :: Result NetworkMessage -> BS.ByteString -> IO ()
+      loop decoder _data = do
+        case decoder of
+          Done msg leftover -> do
+            BS.appendFile o_file $ serialize False msg
+            let x = deserialize False (serialize False msg)
+            case x of
+              Right y -> when (y /= msg) $ print y >> print msg >> putStrLn ""
+              _ -> return ()
+            loop (runGetPartial (getIMC True :: Get NetworkMessage) $ BS.append leftover _data) BS.empty
+          Partial k -> do
+            loop (k _data) BS.empty
+          Fail error_msg leftover -> if BS.null leftover 
+            then return () 
+            else print ("I failed! :(\n" ++ error_msg) >> loop (runGetPartial (getIMC True :: Get NetworkMessage) (BS.drop 2 $ BS.append leftover _data)) BS.empty
+  
+  x <- BS.readFile i_file
+  loop (runGetPartial (getIMC True :: Get NetworkMessage) x) BS.empty

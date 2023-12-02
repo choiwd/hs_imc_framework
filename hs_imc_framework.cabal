@@ -1,0 +1,211 @@
+cabal-version:      2.4
+name:               IMC
+version:            0.1.0.0
+
+-- A short (one-line) description of the package.
+synopsis:           A Haskell Framework for autonomous vehicles built upon the LSTS toolchain. 
+
+-- A longer description of the package.
+-- description:
+
+-- A URL where users can report bugs.
+-- bug-reports:
+
+-- The license under which the package is released.
+-- license:
+author:             choiwd
+maintainer:         choiwd
+
+-- A copyright notice.
+-- copyright:
+-- category:
+extra-source-files: CHANGELOG.md
+
+common common-dependencies
+    build-depends:    base ^>= 4.16.4.0
+
+library
+    -- Modules exported by the library.
+    exposed-modules:  IMC.Base
+                    , IMC.Messages
+                    , IMC.Network
+                    
+                    , IMC.Maneuvers
+                    , IMC.Maneuvers.FollowRef
+                    , IMC.Control.BehaviorTree
+
+                    , IMC.Control.Utils
+                    , IMC.Control.Subscribe
+
+    -- Modules included in this library but not exported.
+    other-modules:
+    
+    -- LANGUAGE extensions used by modules in this package.
+    -- other-extensions:
+
+    -- Other library packages from which modules are imported.
+    build-depends:    base ^>=4.16.4.0
+
+                    -- Data types
+                    , cereal ^>= 0.5.8.3
+                    , bytestring ^>= 0.11.4.0
+                    , containers ^>= 0.6.5.1
+                    , data-default ^>= 0.7.1.1
+                    , vector ^>= 0.13.0.0
+
+                    -- Generics and lenses
+                    , generic-lens ^>= 2.2.1.0
+                    , lens ^>= 5.2.2
+                    
+                    -- Monad transformers
+                    , mtl ^>= 2.3.1
+                    
+                    -- Network
+                    , connection ^>= 0.3.1
+                    , time ^>= 1.12.2
+                    , network-info ^>= 0.2.1
+                    
+                    -- Yampa/FRP
+                    , Yampa ^>= 0.13.6
+
+    -- Directories containing source files.
+    hs-source-dirs:   IMC
+
+    -- Base language which the package is written in.
+    default-language: Haskell2010
+
+executable followSys
+    --ghc-options:      -fwarn-incomplete-patterns
+    --ghc-options:      -freduction-depth=0 --Uses too much memory and does not compile hahaha
+    import:           common-dependencies
+    main-is:          Main.hs
+
+    -- Modules included in this executable, other than Main.
+    --other-modules:    
+
+    -- LANGUAGE extensions used by modules in this package.
+    --other-extensions:
+    
+    build-depends:    
+                    -- Data types
+                    , data-default ^>= 0.7.1.1
+
+                    -- Generics and lenses
+                    , lens ^>= 5.2.2
+                    
+                    -- Time 
+                    , time ^>= 1.12.2
+
+                    -- Yampa/FRP
+                    , Yampa ^>= 0.13.6
+                    
+                    -- command line arg parsing
+                    , cmdargs ^>= 0.10.22
+                    
+                    -- This library
+                    , IMC
+    hs-source-dirs:   followSys
+    default-language: Haskell2010
+
+executable subscribe
+    main-is:          Main.hs
+
+    -- Modules included in this executable, other than Main.
+    -- other-modules:    
+
+    -- LANGUAGE extensions used by modules in this package.
+    -- other-extensions:
+
+    build-depends:    base ^>= 4.16.4.0
+                    
+                    -- Time 
+                    , time ^>= 1.12.2
+
+                    -- Network
+                    , connection ^>= 0.3.1
+                    
+                    -- Monad transformers
+                    , mtl ^>= 2.3.1
+
+                    -- command line arg parsing
+                    , cmdargs ^>= 0.10.22
+
+                    -- Generics and lenses
+                    , lens ^>= 5.2.2
+
+                    , IMC
+                    
+    hs-source-dirs:   subscribe
+    default-language: Haskell2010
+
+executable followForm
+    --ghc-options:      -fwarn-incomplete-patterns
+    --ghc-options:      -freduction-depth=0 --Uses too much memory and does not compile hahaha
+    
+    main-is:          Main.hs
+
+    -- Modules included in this executable, other than Main.
+    other-modules:    FollowFormationTree
+                    
+                    , SubTrees
+                    , SubTrees.Commons
+                    , SubTrees.ManageTask
+                    , SubTrees.PerformTask
+                    , SubTrees.StayInFormation
+
+                    , SendTask
+
+    -- LANGUAGE extensions used by modules in this package.
+    --other-extensions:
+    default-extensions: 
+                      Arrows
+                    , OverloadedLabels
+
+    build-depends:    base ^>= 4.16.4.0
+
+                    -- Data types
+                    , data-default ^>= 0.7.1.1
+                    , bytestring ^>= 0.11.4.0
+
+                    -- Lenses
+                    , lens ^>= 5.2.2
+
+                    -- Deep forced evaluation
+                    , deepseq ^>= 1.4.6.1
+                    
+                    -- Random generator
+                    , random ^>= 1.2.1.1
+
+                    -- Time 
+                    , time ^>= 1.12.2
+
+                    -- Yampa/FRP
+                    , Yampa ^>= 0.13.6
+                    
+                    -- command line arg parsing
+                    , cmdargs ^>= 0.10.22
+                    
+                    -- This library
+                    , IMC
+    hs-source-dirs:   followForm
+    default-language: Haskell2010
+    
+executable extractIMC
+    main-is:          Main.hs
+
+    -- Modules included in this executable, other than Main.
+    -- other-modules:    
+
+    -- LANGUAGE extensions used by modules in this package.
+    -- other-extensions:
+
+    build-depends:    base ^>= 4.16.4.0
+                    , xml ^>= 1.3.14
+                    , text ^>= 2.0.1
+                    , containers ^>= 0.6.5.1
+                    
+                    -- command line arg parsing
+                    , cmdargs ^>= 0.10.22
+                    
+    hs-source-dirs:   extractIMC
+    default-language: Haskell2010
